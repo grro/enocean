@@ -5,7 +5,7 @@ from datetime import datetime
 from redzoo.database.simple import SimpleDB
 from abc import ABC, abstractmethod
 from threading import Thread
-from typing import List, Set
+from typing import List, Set, Any
 from time import sleep
 import enocean.utils
 from enocean.communicators.serialcommunicator import SerialCommunicator
@@ -14,19 +14,20 @@ import queue
 
 
 
-class Device:
+class Device(ABC):
 
     def __init__(self, name: str):
         self.name = name
-        self.listeners: Callable[Device] = set()
+        self.listeners: Set[Callable[['Device'], None]] = set()
 
-    def register_listener(self, listener: Callable[Device]):
+    def register_listener(self, listener: Callable[['Device'], None]):
         self.listeners.add(listener)
 
     def _notify_listeners(self):
         for listener in self.listeners:
             listener(self)
 
+    @abstractmethod
     def handle_packet(self, packet) -> bool:
         pass
 
@@ -39,13 +40,13 @@ class WindowHandle(Device):
         return eep_id.upper() == 'F6:10:00'
 
     def __init__(self, name: str, directory: str, eep_id: str, enocean_id: str):
-        self.db = SimpleDB("processing_state_" + eep_id + "_" + enocean_id, directory=directory)
+        self.db = SimpleDB(f"processing_state_{eep_id}_{enocean_id}", directory=directory)
         self.sender = enocean_id.upper()
         self.sender_hex_string: List[int] = enocean.utils.from_hex_string(self.sender)
         self.eep_id = eep_id.upper()
         self.eep_id_hex_string: List[int] = enocean.utils.from_hex_string(self.eep_id)
         self.last_state_update = datetime.now()
-        logging.info("window handle (eep_id: " + eep_id + ", enocean_id: " + enocean_id +")")
+        logging.info(f"window handle (eep_id: {eep_id}, enocean_id: {enocean_id})")
         super().__init__(name)
 
     @property
@@ -69,11 +70,11 @@ class WindowHandle(Device):
         previous_state = self.db.get("state", -1)
         if previous_state != state:
             self.db.put("state", state)
-            logging.info(self.name + " state updated " + str(self.state) + " (" + self.state_text + ")")
+            logging.info(f"{self.name} state updated {self.state} ({self.state_text})")
             self.last_state_update = datetime.now()
             self._notify_listeners()
 
-    def handle_packet(self, packet) -> bool:
+    def handle_packet(self, packet: Any) -> bool:
         try:
             if self.eep_id_hex_string[0] == 0xf6 and packet.packet_type == PACKET.RADIO_ERP1 and packet.rorg == RORG.RPS:
                 packet.parse_eep(self.eep_id_hex_string[1], self.eep_id_hex_string[2])
@@ -81,8 +82,8 @@ class WindowHandle(Device):
                 if self.sender == packet.sender_hex:
                     self.__set_state(state)
                     return True
-        except Exception as e:
-            logging.warning("error occurred by handling packet", e)
+        except Exception:
+            logging.exception("error occurred by handling packet")
         return False
 
 
@@ -108,7 +109,7 @@ class Enocean:
             if self.communicator.base_id is None:
                 logging.warning('init failed')
             else:
-                logging.info('The Base ID of your module is %s.' % enocean.utils.to_hex_string(self.communicator.base_id))
+                logging.info(f"The Base ID of your module is {enocean.utils.to_hex_string(self.communicator.base_id)}")
 
             # endless loop receiving radio packets
             while self.communicator.is_alive() and self.running:
@@ -124,10 +125,8 @@ class Enocean:
                     continue
                 except KeyboardInterrupt:
                     break
-                except Exception as e:
-                    logging.warning("error occurred by processing packet", e)
+                except Exception:
+                    logging.exception("error occurred by processing packet")
                     sleep(2)
         finally:
             self.communicator.stop()
-
-
