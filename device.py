@@ -1,8 +1,11 @@
 import logging
+from collections.abc import Callable
+from datetime import datetime
+
 from redzoo.database.simple import SimpleDB
 from abc import ABC, abstractmethod
 from threading import Thread
-from typing import List
+from typing import List, Set
 from time import sleep
 import enocean.utils
 from enocean.communicators.serialcommunicator import SerialCommunicator
@@ -13,15 +16,20 @@ import queue
 
 class Device:
 
+    def __init__(self, name: str):
+        self.name = name
+        self.listeners: Callable[Device] = set()
+
+    def register_listener(self, listener: Callable[Device]):
+        self.listeners.add(listener)
+
+    def _notify_listeners(self):
+        for listener in self.listeners:
+            listener(self)
+
     def handle_packet(self, packet) -> bool:
         pass
 
-
-class DeviceListener(ABC):
-
-    @abstractmethod
-    def on_updated(self, device: Device):
-        pass
 
 
 class WindowHandle(Device):
@@ -30,15 +38,15 @@ class WindowHandle(Device):
     def supports(eep_id: str) -> bool:
         return eep_id.upper() == 'F6:10:00'
 
-    def __init__(self, name: str, directory: str, eep_id: str, enocean_id: str, listener: DeviceListener):
-        self.listener = listener
-        self.name = name
+    def __init__(self, name: str, directory: str, eep_id: str, enocean_id: str):
         self.db = SimpleDB("processing_state_" + eep_id + "_" + enocean_id, directory=directory)
         self.sender = enocean_id.upper()
         self.sender_hex_string: List[int] = enocean.utils.from_hex_string(self.sender)
         self.eep_id = eep_id.upper()
         self.eep_id_hex_string: List[int] = enocean.utils.from_hex_string(self.eep_id)
+        self.last_state_update = datetime.now()
         logging.info("window handle (eep_id: " + eep_id + ", enocean_id: " + enocean_id +")")
+        super().__init__(name)
 
     @property
     def closed(self) -> bool:
@@ -58,9 +66,12 @@ class WindowHandle(Device):
         return self.db.get("state", 3)
 
     def __set_state(self, state: int):
-        self.db.put("state", state)
-        logging.info(self.name + " state updated " + str(self.state) + " (" + self.state_text + ")")
-        self.listener.on_updated(self)
+        previous_state = self.db.get("state", -1)
+        if previous_state != state:
+            self.db.put("state", state)
+            logging.info(self.name + " state updated " + str(self.state) + " (" + self.state_text + ")")
+            self.last_state_update = datetime.now()
+            self._notify_listeners()
 
     def handle_packet(self, packet) -> bool:
         try:
