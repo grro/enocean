@@ -123,18 +123,19 @@ class EnoceanMCPServer:
                 if d.name == name:
                     return {
                         "name": d.name,
-                        "state": "CLOSED" if d.closed else "OPEN"
+                        "state": "CLOSED" if d.closed else "OPEN",
+                        "last_updated_utc": d.last_state_update.isoformat()
                     }
 
             # Let FastMCP handle the HTTP Error natively rather than returning strings
-            raise ValueError(f"Device '{name}' not found.")
+            raise ValueError(f"Device '{name}' not found. Available devices: {[d.name for d in self.devices]}")
 
 
         @self.mcp.tool(name="device_overview")
         def get_device_overview() -> Dict[str, Any]:
             """
             Retrieve a real-time overview of all window handles.
-            Returns a dictionary mapping device names to their status and last update time.
+            Returns a dictionary mapping device names to their status and last update time (UTC).
             OPEN windows are sorted to appear first.
             """
             if not self.devices:
